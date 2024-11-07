@@ -1,0 +1,99 @@
+import secrets
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+import os
+
+# Generate large prime number and generator for DH (these are small for simplicity, but larger values are recommended)
+p = 23  # Typically a large prime number in real implementations
+g = 5   # A primitive root modulo p
+
+# Function to generate private and public keys
+def generate_keys():
+    private_key = secrets.randbelow(p)  # Private key, random number < p
+    public_key = pow(g, private_key, p)  # Public key, g^private_key % p
+    return private_key, public_key
+
+# Function to compute shared secret
+def compute_shared_secret(private_key, other_public_key):
+    return pow(other_public_key, private_key, p)
+
+# Derive AES key from the shared secret using HKDF
+def derive_aes_key(shared_secret):
+    shared_secret_bytes = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, 'big')
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,  # AES-256 requires a 32-byte key
+        salt=None,
+        info=b'handshake data',
+        backend=default_backend()
+    )
+    aes_key = hkdf.derive(shared_secret_bytes)
+    return aes_key
+
+# AES encryption function
+def encrypt_message(aes_key, plaintext):
+    iv = os.urandom(16)  # 16-byte IV for AES-CBC mode
+    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    # Pad plaintext to block size of 16 bytes
+    padding_length = 16 - (len(plaintext) % 16)
+    padded_plaintext = plaintext + bytes([padding_length]) * padding_length
+    ciphertext = iv + encryptor.update(padded_plaintext) + encryptor.finalize()
+    return ciphertext.hex()  # Return as hex string for cleaner output
+
+# AES decryption function
+def decrypt_message(aes_key, ciphertext_hex):
+    ciphertext = bytes.fromhex(ciphertext_hex)  # Convert hex string back to bytes
+    iv = ciphertext[:16]  # Extract the IV from the beginning of the ciphertext
+    actual_ciphertext = ciphertext[16:]
+    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    padded_plaintext = decryptor.update(actual_ciphertext) + decryptor.finalize()
+    # Remove padding
+    padding_length = padded_plaintext[-1]
+    plaintext = padded_plaintext[:-padding_length]
+    return plaintext
+
+# Simulate two users (Alice and Bob) exchanging keys and messages
+def simulate_diffie_hellman():
+    # Alice generates her keys
+    alice_private_key, alice_public_key = generate_keys()
+    print(f"Alice's Public Key: {alice_public_key}")
+
+    # Bob generates his keys
+    bob_private_key, bob_public_key = generate_keys()
+    print(f"Bob's Public Key: {bob_public_key}")
+
+    # Alice and Bob compute the shared secret
+    alice_shared_secret = compute_shared_secret(alice_private_key, bob_public_key)
+    bob_shared_secret = compute_shared_secret(bob_private_key, alice_public_key)
+    print(f"Alice's Computed Shared Secret: {alice_shared_secret}")
+    print(f"Bob's Computed Shared Secret: {bob_shared_secret}")
+
+    # Derive AES key from the shared secret
+    alice_aes_key = derive_aes_key(alice_shared_secret)
+    bob_aes_key = derive_aes_key(bob_shared_secret)
+
+    # Loop for repeated encryption and decryption
+    while True:
+        message = input("Enter the message to be encrypted and sent from Alice to Bob (or enter '-1' to exit): ")
+        
+        if message == "-1":
+            print("Exiting the program.")
+            break
+
+        # Convert the message to bytes
+        message_bytes = message.encode()
+
+        # Alice encrypts the message
+        ciphertext_hex = encrypt_message(alice_aes_key, message_bytes)
+        print(f"Encrypted Message (hex): {ciphertext_hex}")
+
+        # Bob decrypts the message
+        decrypted_message = decrypt_message(bob_aes_key, ciphertext_hex)
+        print(f"Decrypted Message: {decrypted_message.decode()}")
+
+# Run the simulation
+simulate_diffie_hellman()
